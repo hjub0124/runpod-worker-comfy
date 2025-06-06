@@ -21,7 +21,7 @@ RUN apt-get update && apt-get install -y \
 RUN pip install comfy-cli
 
 # Install ComfyUI
-RUN /usr/bin/yes | comfy --workspace /comfyui install --cuda-version 11.8 --nvidia --version 0.2.7
+RUN /usr/bin/yes | comfy --workspace /comfyui install --cuda-version 11.8 --nvidia
 
 # Add HiDream/SD3 node support
 RUN git clone https://github.com/comfyanonymous/ComfyUI-HiDiffusionNodes /comfyui/custom_nodes/ComfyUI-HiDiffusionNodes
