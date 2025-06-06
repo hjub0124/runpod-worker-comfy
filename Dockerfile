@@ -1,78 +1,53 @@
-# Stage 1: Base image with common dependencies
-FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04 AS base
+# Stage 1: Base image with dependencies
+FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04 as base
 
 ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
 ENV PIP_PREFER_BINARY=1
-ENV PYTHONUNBUFFERED=1 
 ENV CMAKE_BUILD_PARALLEL_LEVEL=8
 
-# Install Python, git and other necessary tools
+# Install base system tools
 RUN apt-get update && apt-get install -y \
-    python3.10 \
-    python3-pip \
-    git \
-    wget \
-    libgl1 \
+    python3.10 python3-pip git wget curl unzip libgl1 \
     && ln -sf /usr/bin/python3.10 /usr/bin/python \
     && ln -sf /usr/bin/pip3 /usr/bin/pip \
-    && apt-get autoremove -y && apt-get clean -y && rm -rf /var/lib/apt/lists/*
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Install comfy-cli
 RUN pip install comfy-cli
 
-# Install ComfyUI
-RUN /usr/bin/yes | comfy --workspace /comfyui install --cuda-version 11.8 --nvidia
+# Install ComfyUI in /comfyui
+RUN comfy --workspace /comfyui install --cuda-version 11.8 --nvidia
 
-# Add HiDream/SD3 node support
-RUN git clone https://github.com/comfyanonymous/ComfyUI-HiDiffusionNodes /comfyui/custom_nodes/ComfyUI-HiDiffusionNodes
+# Add HiDiffusion custom nodes (as zip to avoid auth issues)
+RUN mkdir -p /comfyui/custom_nodes/ComfyUI-HiDiffusionNodes && \
+    curl -L https://github.com/comfyanonymous/ComfyUI-HiDiffusionNodes/archive/refs/heads/main.zip -o /tmp/hidiff.zip && \
+    unzip /tmp/hidiff.zip -d /tmp && \
+    mv /tmp/ComfyUI-HiDiffusionNodes-main/* /comfyui/custom_nodes/ComfyUI-HiDiffusionNodes/ && \
+    rm -rf /tmp/hidiff.zip /tmp/ComfyUI-HiDiffusionNodes-main
 
-# Set working directory
+# Set workdir to comfy
 WORKDIR /comfyui
 
-# Install runpod
+# Optional: expose port for local test
+EXPOSE 8188
+
+# Install RunPod + utilities
 RUN pip install runpod requests
 
-# Support for the network volume
-ADD src/extra_model_paths.yaml ./
+# Add startup scripts
+COPY src/start.sh /start.sh
+COPY src/restore_snapshot.sh /restore_snapshot.sh
+COPY src/rp_handler.py test_input.json ./
+COPY extra_model_paths.yaml ./
 
-# Go back to the root
-WORKDIR /
-
-# Add scripts and input
-ADD src/start.sh src/restore_snapshot.sh src/rp_handler.py test_input.json ./
 RUN chmod +x /start.sh /restore_snapshot.sh
 
-# Optionally copy the snapshot file
-ADD *snapshot*.json /
+# Copy snapshot (optional for restoring UI/workflow config)
+COPY *snapshot*.json ./
 
-# Restore the snapshot to install any saved custom nodes
+# Restore snapshot to register custom nodes
 RUN /restore_snapshot.sh
 
-# Start container
-CMD ["/start.sh"]
-
-# Stage 2: Download models
-FROM base AS downloader
-
-ARG HUGGINGFACE_ACCESS_TOKEN
-ARG MODEL_TYPE
-
-WORKDIR /comfyui
-
-RUN mkdir -p models/checkpoints models/vae models/unet models/text_encoders models/lora && \
-    if [ "$MODEL_TYPE" = "hidream-dev" ]; then \
-      wget -O models/unet/hidream_i1_dev_bf16.safetensors https://huggingface.co/Comfy-Org/HiDream-I1_ComfyUI/resolve/main/split_files/unet/hidream_i1_dev_bf16.safetensors && \
-      wget -O models/vae/ae.safetensors https://huggingface.co/Comfy-Org/HiDream-I1_ComfyUI/resolve/main/split_files/vae/ae.safetensors && \
-      wget -O models/text_encoders/clip_l_hidream.safetensors https://huggingface.co/Comfy-Org/HiDream-I1_ComfyUI/resolve/main/split_files/text_encoders/clip_l_hidream.safetensors && \
-      wget -O models/text_encoders/clip_g_hidream.safetensors https://huggingface.co/Comfy-Org/HiDream-I1_ComfyUI/resolve/main/split_files/text_encoders/clip_g_hidream.safetensors && \
-      wget -O models/text_encoders/t5xxl_fp8_e4m3fn_scaled.safetensors https://huggingface.co/Comfy-Org/HiDream-I1_ComfyUI/resolve/main/split_files/text_encoders/t5xxl_fp8_e4m3fn_scaled.safetensors && \
-      wget -O models/text_encoders/llama_3.1_8b_instruct_fp8_scaled.safetensors https://huggingface.co/Comfy-Org/HiDream-I1_ComfyUI/resolve/main/split_files/text_encoders/llama_3.1_8b_instruct_fp8_scaled.safetensors && \
-      wget -O models/lora/Coloring_Book_HiDream_v1_renderartist.safetensors https://your-server-or-uploaded-path/Coloring_Book_HiDream_v1_renderartist.safetensors; \
-    fi
-
-# Stage 3: Final image
-FROM base AS final
-
-COPY --from=downloader /comfyui/models /comfyui/models
-
+# Start script
 CMD ["/start.sh"]
